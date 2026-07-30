@@ -8,7 +8,9 @@ experiment and build a machine-first connectivity layer for AI agents.
 - Improve the identity, capability and signed-envelope protocols.
 - Extend transport security further: WSS/mTLS support, static-key Noise
   patterns, or session resumption for the existing Noise_NN link.
-- Build a federated registry/DHT and multi-relay routing.
+- Grow federation beyond the current static full mesh: a DHT or registry for
+  discovery, multi-hop routing, route attestation, and cross-broker
+  consensus on replay/quota state.
 - Extend persistent delivery with retry backoff, a dead-letter queue and
   replication.
 - Design web-of-attestation, reputation or capability revocation.

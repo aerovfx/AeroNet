@@ -102,6 +102,7 @@ AI-native Internet is solved.
 | Durable store | SQLite WAL persists replay state, capability usage and the offline queue |
 | Transport encryption | Every WebSocket link runs a Noise_NN handshake before any application data, with the handshake hash bound into the signed auth proof |
 | Broker | Resolver/relay that enforces policy, restores pending messages and writes a JSONL audit log |
+| Federation | A broker dials its configured peers exactly like an agent would; if a recipient isn't connected locally, the envelope is forwarded to every peer and still queued durably |
 | Agent runtime | Signed delivery ACKs, an Anthropic adapter and an `echo` mode |
 
 ```text
@@ -184,6 +185,35 @@ cargo run --bin agent -- \
 To use a real model, set `ANTHROPIC_API_KEY`, replace `--provider echo` with
 `--provider anthropic` and optionally pass `--model <model-id>`.
 
+### 6. Federate two brokers (optional)
+
+A broker can forward envelopes to a second broker when the recipient isn't
+connected locally. Give each broker its own identity and list the other as a
+peer, symmetrically:
+
+```bash
+cargo run --bin aeronet-key -- generate --out broker-x.key.json
+cargo run --bin aeronet-key -- generate --out broker-y.key.json
+BROKER_X_DID='did:aeronet:...'
+BROKER_Y_DID='did:aeronet:...'
+
+cargo run --bin broker -- --listen 127.0.0.1:8787 --state-db x.db \
+  --audit-log x.jsonl --broker-key broker-x.key.json \
+  --peer-broker "ws://127.0.0.1:8788@$BROKER_Y_DID"
+
+cargo run --bin broker -- --listen 127.0.0.1:8788 --state-db y.db \
+  --audit-log y.jsonl --broker-key broker-y.key.json \
+  --peer-broker "ws://127.0.0.1:8787@$BROKER_X_DID"
+```
+
+Each broker dials the other exactly like an agent would — same Noise
+handshake, same signed DID auth proof. Since both sides configure and dial
+each other, the pair ends up mutually authenticated: each direction proves
+the identity of whichever side initiated it. Point Alice at broker X and Bob
+at broker Y (`--broker 127.0.0.1:8788`); a task Alice sends to Bob is
+forwarded across the federation link and Bob's reply comes back the same
+way, with each broker still queuing its own durable copy as a fallback.
+
 ## Current limitations
 
 AeroNet is an application-layer MVP, not yet a complete distributed network:
@@ -194,12 +224,27 @@ AeroNet is an application-layer MVP, not yet a complete distributed network:
   man-in-the-middle splicing two separate Noise sessions is detected and
   rejected. This protects the wire; it does not yet replace WSS/mTLS for
   deployments that need certificate-based trust or public CA compatibility.
-- The broker is still a single resolver and relay; there is no DHT,
-  federation, multi-hop route attestation or reputation yet.
+- Federation is a statically configured, single-hop full mesh: every broker
+  must list every peer it wants to reach directly, and a peer that isn't
+  connected locally to *any* configured broker in the mesh is unreachable.
+  There is no DHT, iterative lookup, multi-hop routing, route attestation or
+  reputation yet. Forwarding is also best-effort broadcast to all peers, so a
+  message can occasionally be queued durably on more than one broker if the
+  recipient never claims it from some of them (harmless — those copies
+  self-expire via the existing TTL cleanup).
+- A broker only cryptographically proves the identity of whichever side
+  *dialed* a given federation link, the same address-based trust an agent
+  already places in `--broker <addr>`. A pair of brokers that both list each
+  other ends up mutually authenticated by their two separately-dialed links,
+  but a single one-way link does not, by itself, prove who answered the
+  configured URL.
 - Delivery is currently **at-least-once**; agents ACK automatically, but
   there is no backoff-based retry scheduler or dead-letter queue.
-- Replay state and the pending queue run on a single SQLite node; there is
-  no replication, compaction policy or consensus across brokers.
+- Replay state, the pending queue and capability quota usage are each
+  tracked per broker with no replication, compaction policy or consensus
+  across the mesh. A capability's `max_messages` is therefore enforced
+  independently by every broker it happens to route through, not as one
+  global count.
 - Capability quotas are durable, but there is no revocation registry or
   delegation chain yet.
 - The cost field is only an extension point; no payment channel or ledger is
@@ -222,7 +267,9 @@ cargo clippy --all-targets -- -D warnings
 The tests cover signatures after payload tampering, tokens used by the wrong
 agent, expired messages, replay, queue recovery after restart, signed ACKs,
 and the Noise transport (matching channel binding between both sides and
-rejection of tampered ciphertext).
+rejection of tampered ciphertext). Federation itself is network/IO-heavy
+broker glue rather than pure logic, so it is verified with a real two-broker
+smoke test (see step 6 above) rather than unit tests.
 
 ## Building AeroNet together
 
