@@ -11,32 +11,52 @@ pub struct AuthChallenge {
     pub challenge: String,
 }
 
+/// Authentication proof binding an Ed25519 DID to both a broker-issued
+/// challenge and the Noise transport channel it was sent over.
+///
+/// `channel_binding` carries the Noise handshake hash of the encrypted
+/// session (see [`crate::transport`]). Signing it alongside the challenge
+/// means an attacker who spliced two separate Noise sessions together
+/// (proxying between agent and broker) cannot forward a valid proof from one
+/// session onto the other: the handshake hash differs on each side of the
+/// splice, so the signature would no longer match the receiving side's own
+/// channel binding.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthProof {
     pub agent_id: AgentId,
     pub public_key: String,
     pub challenge: String,
+    pub channel_binding: String,
     pub signature: String,
 }
 
 impl AuthProof {
-    pub fn create(identity: &Identity, challenge: String) -> Self {
+    pub fn create(identity: &Identity, challenge: String, channel_binding: String) -> Self {
+        let signature = identity.sign(&Self::signing_bytes(&challenge, &channel_binding));
         Self {
             agent_id: identity.id(),
             public_key: identity.public_key_b64(),
-            signature: identity.sign(challenge.as_bytes()),
             challenge,
+            channel_binding,
+            signature,
         }
     }
 
-    pub fn verify(&self, expected_challenge: &str) -> Result<()> {
+    fn signing_bytes(challenge: &str, channel_binding: &str) -> Vec<u8> {
+        [challenge.as_bytes(), b"|", channel_binding.as_bytes()].concat()
+    }
+
+    pub fn verify(&self, expected_challenge: &str, expected_channel_binding: &str) -> Result<()> {
         if self.challenge != expected_challenge {
             bail!("Challenge mismatch")
+        }
+        if self.channel_binding != expected_channel_binding {
+            bail!("Channel binding mismatch: possible transport-level MITM")
         }
         verify_identity(
             &self.agent_id,
             &self.public_key,
-            self.challenge.as_bytes(),
+            &Self::signing_bytes(&self.challenge, &self.channel_binding),
             &self.signature,
         )
     }

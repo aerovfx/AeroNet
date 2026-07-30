@@ -1,6 +1,6 @@
 use aeronet::{
-    AgentId, AuthChallenge, AuthProof, Capability, Envelope, Identity, MessageKind, Payload,
-    TaskContract,
+    transport, AgentId, AuthChallenge, AuthProof, Capability, Envelope, Identity, MessageKind,
+    NoiseSession, Payload, TaskContract,
 };
 use anyhow::{Context, Result};
 use chrono::Duration;
@@ -85,18 +85,43 @@ async fn main() -> Result<()> {
     };
     let client = reqwest::Client::new();
     let url = format!("ws://{}/ws/{}", args.broker, identity.id());
-    let (mut stream, _) = connect_async(&url)
+    let (stream, _) = connect_async(&url)
         .await
         .context("Cannot connect to broker")?;
-    let challenge = match stream.next().await {
-        Some(Ok(WsMessage::Text(text))) => serde_json::from_str::<AuthChallenge>(&text)?,
+    let (mut tx, mut rx) = stream.split();
+
+    // Wrap the connection in a Noise_NN session before any application data
+    // is exchanged. See src/transport.rs for why this is enough combined
+    // with signing the resulting channel binding in the AuthProof below.
+    let noise = transport::initiator_handshake(
+        |message| async {
+            tx.send(WsMessage::Binary(message))
+                .await
+                .map_err(|error| anyhow::anyhow!("cannot send Noise handshake frame: {error}"))
+        },
+        || async {
+            match rx.next().await {
+                Some(Ok(WsMessage::Binary(bytes))) => Ok(bytes),
+                _ => anyhow::bail!("expected a Noise handshake frame"),
+            }
+        },
+    )
+    .await
+    .context("Noise handshake with broker failed")?;
+    let channel_binding = noise.channel_binding();
+
+    let challenge = match rx.next().await {
+        Some(Ok(WsMessage::Binary(bytes))) => {
+            let plaintext = noise
+                .decrypt(&bytes)
+                .context("cannot decrypt authentication challenge")?;
+            serde_json::from_slice::<AuthChallenge>(&plaintext)?
+        }
         _ => anyhow::bail!("Broker did not send an authentication challenge"),
     };
-    let proof = AuthProof::create(&identity, challenge.challenge);
-    stream
-        .send(WsMessage::Text(serde_json::to_string(&proof)?))
-        .await?;
-    let (mut tx, mut rx) = stream.split();
+    let proof = AuthProof::create(&identity, challenge.challenge, channel_binding);
+    let proof_ciphertext = noise.encrypt(&serde_json::to_vec(&proof)?)?;
+    tx.send(WsMessage::Binary(proof_ciphertext)).await?;
     let mut history = Vec::new();
     let mut turns = 0u32;
 
@@ -119,7 +144,7 @@ async fn main() -> Result<()> {
             Some(capability.clone()),
             Duration::minutes(5),
         )?;
-        send(&mut tx, &envelope).await?;
+        send(&mut tx, &noise, &envelope).await?;
         history.push(HistoryTurn {
             role: "assistant",
             content: goal.clone(),
@@ -129,12 +154,15 @@ async fn main() -> Result<()> {
     }
 
     while let Some(frame) = rx.next().await {
-        let text = match frame? {
-            WsMessage::Text(value) => value,
+        let bytes = match frame? {
+            WsMessage::Binary(value) => value,
             WsMessage::Close(_) => break,
             _ => continue,
         };
-        let incoming: Envelope = serde_json::from_str(&text)?;
+        let plaintext = noise
+            .decrypt(&bytes)
+            .context("received a frame with invalid Noise ciphertext")?;
+        let incoming: Envelope = serde_json::from_slice(&plaintext)?;
         incoming
             .verify(chrono::Utc::now())
             .context("Broker relayed an invalid message")?;
@@ -153,7 +181,7 @@ async fn main() -> Result<()> {
             Some(capability.clone()),
             Duration::minutes(1),
         )?;
-        send(&mut tx, &delivery_ack).await?;
+        send(&mut tx, &noise, &delivery_ack).await?;
         if matches!(incoming.kind, MessageKind::End) {
             break;
         }
@@ -181,7 +209,7 @@ async fn main() -> Result<()> {
                 None,
                 Duration::minutes(1),
             )?;
-            send(&mut tx, &end).await?;
+            send(&mut tx, &noise, &end).await?;
             break;
         }
         let answer = match args.provider {
@@ -210,7 +238,7 @@ async fn main() -> Result<()> {
             Some(capability.clone()),
             Duration::minutes(5),
         )?;
-        send(&mut tx, &reply).await?;
+        send(&mut tx, &noise, &reply).await?;
         turns += 1;
     }
     Ok(())
@@ -224,13 +252,13 @@ fn payload_text(payload: &Payload) -> String {
     }
 }
 
-async fn send<S>(tx: &mut S, envelope: &Envelope) -> Result<()>
+async fn send<S>(tx: &mut S, noise: &NoiseSession, envelope: &Envelope) -> Result<()>
 where
     S: futures_util::Sink<WsMessage> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
-    tx.send(WsMessage::Text(serde_json::to_string(envelope)?))
-        .await?;
+    let ciphertext = noise.encrypt(&serde_json::to_vec(envelope)?)?;
+    tx.send(WsMessage::Binary(ciphertext)).await?;
     Ok(())
 }
 
@@ -256,7 +284,7 @@ async fn call_anthropic(
     let status = response.status();
     let body: serde_json::Value = response.json().await.context("API response is not JSON")?;
     if !status.is_success() {
-        anyhow::bail!("Anthropic API lỗi {status}: {body}")
+        anyhow::bail!("Anthropic API error {status}: {body}")
     }
     body["content"]
         .as_array()

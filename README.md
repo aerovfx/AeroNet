@@ -100,6 +100,7 @@ AI-native Internet is solved.
 | Task contract | Goal, constraints, compute budget, deadline and output schema |
 | Knowledge object | Data with ontology, confidence, `valid_from`, `valid_until` and `superseded_by` |
 | Durable store | SQLite WAL persists replay state, capability usage and the offline queue |
+| Transport encryption | Every WebSocket link runs a Noise_NN handshake before any application data, with the handshake hash bound into the signed auth proof |
 | Broker | Resolver/relay that enforces policy, restores pending messages and writes a JSONL audit log |
 | Agent runtime | Signed delivery ACKs, an Anthropic adapter and an `echo` mode |
 
@@ -109,6 +110,7 @@ src/
 ├── capability.rs     capability tokens
 ├── protocol.rs       auth proofs, envelopes, tasks and knowledge objects
 ├── storage.rs        persistent queue, replay state and capability quotas
+├── transport.rs      Noise_NN session wrapping the WebSocket link
 └── bin/
     ├── broker.rs     WebSocket resolver/relay + policy enforcement
     ├── agent.rs      agent runtime + model adapters
@@ -186,9 +188,12 @@ To use a real model, set `ANTHROPIC_API_KEY`, replace `--provider echo` with
 
 AeroNet is an application-layer MVP, not yet a complete distributed network:
 
-- The WebSocket demo binds to localhost only; payloads are signed but not
-  encrypted. Real-world deployments need WSS/mTLS or Noise session
-  encryption.
+- The WebSocket demo binds to localhost only. Every link is now wrapped in a
+  Noise_NN session (forward-secret, authenticated-encrypted) with the
+  handshake hash bound into the signed DID auth proof, so an active
+  man-in-the-middle splicing two separate Noise sessions is detected and
+  rejected. This protects the wire; it does not yet replace WSS/mTLS for
+  deployments that need certificate-based trust or public CA compatibility.
 - The broker is still a single resolver and relay; there is no DHT,
   federation, multi-hop route attestation or reputation yet.
 - Delivery is currently **at-least-once**; agents ACK automatically, but
@@ -215,8 +220,9 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 The tests cover signatures after payload tampering, tokens used by the wrong
-agent, expired messages, replay, queue recovery after restart and signed
-ACKs.
+agent, expired messages, replay, queue recovery after restart, signed ACKs,
+and the Noise transport (matching channel binding between both sides and
+rejection of tampered ciphertext).
 
 ## Building AeroNet together
 

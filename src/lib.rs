@@ -7,7 +7,9 @@ pub mod capability;
 pub mod identity;
 pub mod protocol;
 pub mod storage;
+pub mod transport;
 
 pub use capability::{Capability, CapabilityAction};
 pub use identity::{AgentId, Identity};
 pub use protocol::{AuthChallenge, AuthProof, Envelope, MessageKind, Payload, TaskContract};
+pub use transport::NoiseSession;

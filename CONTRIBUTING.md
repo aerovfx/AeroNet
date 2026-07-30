@@ -6,7 +6,8 @@ experiment and build a machine-first connectivity layer for AI agents.
 ## What can you contribute?
 
 - Improve the identity, capability and signed-envelope protocols.
-- Add WSS/mTLS or Noise transport encryption.
+- Extend transport security further: WSS/mTLS support, static-key Noise
+  patterns, or session resumption for the existing Noise_NN link.
 - Build a federated registry/DHT and multi-relay routing.
 - Extend persistent delivery with retry backoff, a dead-letter queue and
   replication.

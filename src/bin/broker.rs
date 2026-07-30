@@ -1,6 +1,6 @@
 use aeronet::{
     storage::{AcceptOutcome, DeliveryStore},
-    AuthChallenge, AuthProof, Envelope,
+    transport, AuthChallenge, AuthProof, Envelope,
 };
 use axum::{
     extract::{
@@ -74,33 +74,68 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, did, state))
 }
 
-async fn handle_socket(mut socket: WebSocket, did: String, state: AppState) {
+async fn handle_socket(socket: WebSocket, did: String, state: AppState) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Wrap the raw WebSocket connection in a Noise_NN session before any
+    // application data is exchanged. This gives the link forward-secret
+    // encryption and integrity even though Noise_NN itself is anonymous.
+    let noise = match transport::responder_handshake(
+        |message| async {
+            ws_tx
+                .send(WsMessage::Binary(message))
+                .await
+                .map_err(|error| anyhow::anyhow!("cannot send Noise handshake frame: {error}"))
+        },
+        || async {
+            match ws_rx.next().await {
+                Some(Ok(WsMessage::Binary(bytes))) => Ok(bytes),
+                _ => anyhow::bail!("expected a Noise handshake frame"),
+            }
+        },
+    )
+    .await
+    {
+        Ok(session) => Arc::new(session),
+        Err(error) => {
+            tracing::warn!(agent = %did, %error, "Noise handshake failed");
+            return;
+        }
+    };
+    let channel_binding = noise.channel_binding();
+
     let challenge = uuid::Uuid::new_v4().to_string();
     let challenge_frame = AuthChallenge {
         challenge: challenge.clone(),
     };
-    if socket
-        .send(WsMessage::Text(
-            serde_json::to_string(&challenge_frame).unwrap(),
-        ))
+    let Ok(challenge_bytes) = serde_json::to_vec(&challenge_frame) else {
+        return;
+    };
+    let Ok(challenge_ciphertext) = noise.encrypt(&challenge_bytes) else {
+        return;
+    };
+    if ws_tx
+        .send(WsMessage::Binary(challenge_ciphertext))
         .await
         .is_err()
     {
         return;
     }
-    let proof = match socket.recv().await {
-        Some(Ok(WsMessage::Text(text))) => serde_json::from_str::<AuthProof>(&text).ok(),
+    let proof = match ws_rx.next().await {
+        Some(Ok(WsMessage::Binary(bytes))) => noise
+            .decrypt(&bytes)
+            .ok()
+            .and_then(|plaintext| serde_json::from_slice::<AuthProof>(&plaintext).ok()),
         _ => None,
     };
     let Some(proof) = proof else {
         tracing::warn!(agent = %did, "missing authentication proof");
         return;
     };
-    if proof.agent_id.to_string() != did || proof.verify(&challenge).is_err() {
+    if proof.agent_id.to_string() != did || proof.verify(&challenge, &channel_binding).is_err() {
         tracing::warn!(agent = %did, "authentication failed");
         return;
     }
-    let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let session_id = uuid::Uuid::new_v4().to_string();
     state.peers.lock().await.insert(
@@ -122,19 +157,27 @@ async fn handle_socket(mut socket: WebSocket, did: String, state: AppState) {
         Err(error) => tracing::error!(agent = %did, %error, "cannot restore pending messages"),
     }
 
+    let noise_for_forward = noise.clone();
     let forward = tokio::spawn(async move {
         while let Some(envelope) = rx.recv().await {
-            let Ok(json) = serde_json::to_string(&envelope) else {
+            let Ok(json) = serde_json::to_vec(&envelope) else {
                 continue;
             };
-            if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+            let Ok(ciphertext) = noise_for_forward.encrypt(&json) else {
+                continue;
+            };
+            if ws_tx.send(WsMessage::Binary(ciphertext)).await.is_err() {
                 break;
             }
         }
     });
 
-    while let Some(Ok(WsMessage::Text(text))) = ws_rx.next().await {
-        let envelope: Envelope = match serde_json::from_str(&text) {
+    while let Some(Ok(WsMessage::Binary(bytes))) = ws_rx.next().await {
+        let Ok(plaintext) = noise.decrypt(&bytes) else {
+            tracing::warn!(agent = %did, "dropping frame with invalid Noise ciphertext");
+            continue;
+        };
+        let envelope: Envelope = match serde_json::from_slice(&plaintext) {
             Ok(value) => value,
             Err(error) => {
                 tracing::warn!(agent = %did, %error, "invalid JSON envelope");
