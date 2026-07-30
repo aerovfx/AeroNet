@@ -17,18 +17,18 @@ enum Provider {
 }
 
 #[derive(Parser, Debug)]
-#[command(about = "Agent tham gia mạng AeroNet")]
+#[command(about = "Agent participating in the AeroNet network")]
 struct Args {
     #[arg(long)]
     key: PathBuf,
     #[arg(long)]
     peer: String,
-    /// Token do peer cấp cho agent này.
+    /// Capability token issued by the peer to this agent.
     #[arg(long)]
     capability: PathBuf,
     #[arg(
         long,
-        default_value = "Bạn là một AI agent hữu ích, chính xác và súc tích."
+        default_value = "You are a helpful, precise and concise AI agent."
     )]
     system: String,
     #[arg(long)]
@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
     };
     capability
         .verify(&identity.id(), &peer, &initial_action, chrono::Utc::now())
-        .context("Capability không dùng được cho vai trò đã chọn")?;
+        .context("Capability cannot be used for the selected role")?;
     capability
         .verify(
             &identity.id(),
@@ -75,11 +75,11 @@ async fn main() -> Result<()> {
             &aeronet::CapabilityAction::Acknowledge,
             chrono::Utc::now(),
         )
-        .context("Capability phải cho phép acknowledge để giao nhận bền vững")?;
+        .context("Capability must allow acknowledge for durable delivery")?;
 
     let api_key = match args.provider {
         Provider::Anthropic => {
-            Some(std::env::var("ANTHROPIC_API_KEY").context("Thiếu ANTHROPIC_API_KEY")?)
+            Some(std::env::var("ANTHROPIC_API_KEY").context("Missing ANTHROPIC_API_KEY")?)
         }
         Provider::Echo => None,
     };
@@ -87,10 +87,10 @@ async fn main() -> Result<()> {
     let url = format!("ws://{}/ws/{}", args.broker, identity.id());
     let (mut stream, _) = connect_async(&url)
         .await
-        .context("Không kết nối được broker")?;
+        .context("Cannot connect to broker")?;
     let challenge = match stream.next().await {
         Some(Ok(WsMessage::Text(text))) => serde_json::from_str::<AuthChallenge>(&text)?,
-        _ => anyhow::bail!("Broker không gửi authentication challenge"),
+        _ => anyhow::bail!("Broker did not send an authentication challenge"),
     };
     let proof = AuthProof::create(&identity, challenge.challenge);
     stream
@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
             content: goal.clone(),
         });
         turns += 1;
-        println!("[{}] gửi task {}", identity.id(), envelope.id);
+        println!("[{}] sent task {}", identity.id(), envelope.id);
     }
 
     while let Some(frame) = rx.next().await {
@@ -137,9 +137,9 @@ async fn main() -> Result<()> {
         let incoming: Envelope = serde_json::from_str(&text)?;
         incoming
             .verify(chrono::Utc::now())
-            .context("Broker chuyển message không hợp lệ")?;
+            .context("Broker relayed an invalid message")?;
         if incoming.from != peer || incoming.to != identity.id() {
-            tracing::warn!(message_id = %incoming.id, "Bỏ qua message ngoài phiên peer đã cấu hình");
+            tracing::warn!(message_id = %incoming.id, "ignoring message outside the configured peer session");
             continue;
         }
         let delivery_ack = Envelope::new(
@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
         }
         let incoming_text = payload_text(&incoming.payload);
         println!(
-            "[{}] nhận từ {}: {}",
+            "[{}] received from {}: {}",
             identity.id(),
             incoming.from,
             incoming_text
@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
                 peer.clone(),
                 MessageKind::End,
                 Payload::Text {
-                    content: "Đã đạt giới hạn lượt.".into(),
+                    content: "Turn limit reached.".into(),
                 },
                 Some(incoming.id),
                 None,
@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
             break;
         }
         let answer = match args.provider {
-            Provider::Echo => format!("Đã nhận task. Phản hồi thử nghiệm từ {}.", identity.id()),
+            Provider::Echo => format!("Task received. Test reply from {}.", identity.id()),
             Provider::Anthropic => {
                 call_anthropic(
                     &client,
@@ -252,12 +252,9 @@ async fn call_anthropic(
         .json(&json!({"model": model, "max_tokens": 1024, "system": system, "messages": messages}))
         .send()
         .await
-        .context("Gọi Anthropic API thất bại")?;
+        .context("Anthropic API call failed")?;
     let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .context("Response API không phải JSON")?;
+    let body: serde_json::Value = response.json().await.context("API response is not JSON")?;
     if !status.is_success() {
         anyhow::bail!("Anthropic API lỗi {status}: {body}")
     }
@@ -266,5 +263,5 @@ async fn call_anthropic(
         .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
         .and_then(|b| b["text"].as_str())
         .map(str::to_owned)
-        .context("Response không có text")
+        .context("Response has no text")
 }

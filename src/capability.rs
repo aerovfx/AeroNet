@@ -86,16 +86,16 @@ impl Capability {
         now: DateTime<Utc>,
     ) -> Result<()> {
         if self.schema != "aeronet.capability.v1" {
-            bail!("Capability schema không hỗ trợ")
+            bail!("Unsupported capability schema")
         }
         if &self.grantee != sender || &self.audience != recipient || &self.issuer != recipient {
-            bail!("Capability không cấp cho tuyến này")
+            bail!("Capability was not granted for this route")
         }
         if !self.actions.contains(action) {
-            bail!("Capability không cho phép hành động")
+            bail!("Capability does not allow this action")
         }
         if self.expires_at <= now {
-            bail!("Capability đã hết hạn")
+            bail!("Capability has expired")
         }
         verify_identity(
             &self.issuer,

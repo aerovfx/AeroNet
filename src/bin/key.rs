@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use std::{fs, path::PathBuf, str::FromStr};
 
 #[derive(Parser)]
-#[command(about = "Quản lý danh tính và capability AeroNet")]
+#[command(about = "Manage AeroNet identities and capabilities")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
             ttl_hours,
         } => {
             if out.exists() {
-                anyhow::bail!("Từ chối ghi đè token đã tồn tại: {}", out.display())
+                anyhow::bail!("Refusing to overwrite existing token: {}", out.display())
             }
             let issuer = Identity::load(issuer_key)?;
             let token = Capability::issue(
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
             )?;
             fs::write(&out, serde_json::to_vec_pretty(&token)?)?;
             println!(
-                "Đã cấp token tới {} cho audience {}",
+                "Issued token to {} for audience {}",
                 token.grantee, token.audience
             );
         }

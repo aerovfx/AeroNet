@@ -30,7 +30,7 @@ impl FromStr for AgentId {
     type Err = anyhow::Error;
     fn from_str(value: &str) -> Result<Self> {
         if !value.starts_with("did:aeronet:") || value.len() < 20 {
-            bail!("Agent DID không hợp lệ")
+            bail!("Invalid agent DID")
         }
         Ok(Self(value.to_owned()))
     }
@@ -55,12 +55,12 @@ impl Identity {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let stored: StoredKey = serde_json::from_slice(
-            &fs::read(path).with_context(|| format!("Không đọc được key {}", path.display()))?,
+            &fs::read(path).with_context(|| format!("Cannot read key {}", path.display()))?,
         )?;
         let bytes: [u8; 32] = B64
             .decode(stored.secret_key)?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("Secret key phải dài 32 byte"))?;
+            .map_err(|_| anyhow::anyhow!("Secret key must be 32 bytes"))?;
         Ok(Self {
             signing_key: SigningKey::from_bytes(&bytes),
         })
@@ -69,7 +69,7 @@ impl Identity {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         if path.exists() {
-            bail!("Từ chối ghi đè key đã tồn tại: {}", path.display())
+            bail!("Refusing to overwrite existing key: {}", path.display())
         }
         let stored = StoredKey {
             secret_key: B64.encode(self.signing_key.to_bytes()),
@@ -98,11 +98,11 @@ pub fn verify_identity(
     let key_bytes: [u8; 32] = B64
         .decode(public_key_b64)?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("Public key phải dài 32 byte"))?;
+        .map_err(|_| anyhow::anyhow!("Public key must be 32 bytes"))?;
     let key = VerifyingKey::from_bytes(&key_bytes)?;
     if &AgentId::from_public_key(&key) != id {
-        bail!("DID không khớp public key")
+        bail!("DID does not match public key")
     }
     let signature = Signature::from_slice(&B64.decode(signature_b64)?)?;
-    key.verify(data, &signature).context("Chữ ký không hợp lệ")
+    key.verify(data, &signature).context("Invalid signature")
 }

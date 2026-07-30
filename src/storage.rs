@@ -80,7 +80,7 @@ impl DeliveryStore {
             let original_id = envelope
                 .in_reply_to
                 .as_deref()
-                .context("Delivery ACK thiếu in_reply_to")?;
+                .context("Delivery ACK is missing in_reply_to")?;
             transaction.execute(
                 "DELETE FROM pending_messages WHERE id = ?1 AND recipient = ?2",
                 params![original_id, envelope.from.to_string()],
@@ -116,7 +116,7 @@ impl DeliveryStore {
         let rows = statement.query_map(params![recipient], |row| row.get::<_, String>(0))?;
         rows.map(|row| {
             let json = row?;
-            serde_json::from_str(&json).context("Pending envelope trong database không hợp lệ")
+            serde_json::from_str(&json).context("Invalid pending envelope in database")
         })
         .collect()
     }

@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws/:did", get(ws_handler))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
-    tracing::info!(listen = %args.listen, "AeroNet broker sẵn sàng");
+    tracing::info!(listen = %args.listen, "AeroNet broker ready");
     axum::serve(listener, app).await?;
     Ok(())
 }

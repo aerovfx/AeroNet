@@ -31,7 +31,7 @@ impl AuthProof {
 
     pub fn verify(&self, expected_challenge: &str) -> Result<()> {
         if self.challenge != expected_challenge {
-            bail!("Challenge không khớp")
+            bail!("Challenge mismatch")
         }
         verify_identity(
             &self.agent_id,
@@ -177,10 +177,10 @@ impl Envelope {
 
     pub fn verify(&self, now: DateTime<Utc>) -> Result<()> {
         if self.schema != "aeronet.message.v1" {
-            bail!("Message schema không hỗ trợ")
+            bail!("Unsupported message schema")
         }
         if self.valid_until <= now || self.created_at > now + Duration::minutes(5) {
-            bail!("Message hết hạn hoặc timestamp ở tương lai")
+            bail!("Message expired or timestamped in the future")
         }
         verify_identity(
             &self.from,
@@ -191,7 +191,7 @@ impl Envelope {
         if let Some(action) = self.kind.capability_action() {
             self.capability
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Thiếu capability token"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing capability token"))?
                 .verify(&self.from, &self.to, &action, now)?;
         }
         if let Payload::Knowledge {
@@ -201,7 +201,7 @@ impl Envelope {
         } = &self.payload
         {
             if valid_until <= valid_from || *valid_until <= now {
-                bail!("Knowledge object không còn hiệu lực")
+                bail!("Knowledge object is no longer valid")
             }
         }
         Ok(())
@@ -229,8 +229,8 @@ mod tests {
             MessageKind::Query,
             Payload::Task {
                 contract: TaskContract {
-                    goal: "phân tích dữ liệu".into(),
-                    constraints: vec!["không PII".into()],
+                    goal: "analyze the dataset".into(),
+                    constraints: vec!["no PII".into()],
                     budget_units: Some(100),
                     deadline: None,
                     expected_output_schema: Some("report.v1".into()),
@@ -243,7 +243,7 @@ mod tests {
         .unwrap();
         msg.verify(Utc::now()).unwrap();
         if let Payload::Task { contract } = &mut msg.payload {
-            contract.goal = "nội dung bị sửa".into();
+            contract.goal = "tampered content".into();
         }
         assert!(msg.verify(Utc::now()).is_err());
     }
