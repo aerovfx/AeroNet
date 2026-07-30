@@ -1,4 +1,5 @@
 use aeronet::{
+    resolve_passphrase,
     storage::{AcceptOutcome, DeliveryStore},
     transport, AgentId, AuthChallenge, AuthProof, Envelope, Identity, NoiseSession,
 };
@@ -98,7 +99,10 @@ async fn main() -> anyhow::Result<()> {
     let broker_identity = args
         .broker_key
         .as_ref()
-        .map(Identity::load)
+        .map(|path| {
+            let passphrase = resolve_passphrase(&format!("broker key {}", path.display()), false)?;
+            Identity::load(path, &passphrase)
+        })
         .transpose()?
         .map(Arc::new);
     let federation_peers = args

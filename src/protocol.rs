@@ -314,4 +314,54 @@ mod tests {
         .unwrap();
         assert!(msg.verify(Utc::now()).is_err());
     }
+
+    #[test]
+    fn knowledge_payload_enforces_its_own_validity_window() {
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let cap = Capability::issue(
+            &bob,
+            alice.id(),
+            vec![CapabilityAction::Answer],
+            5,
+            Utc::now() + Duration::hours(1),
+        )
+        .unwrap();
+        let now = Utc::now();
+        let knowledge = |valid_from, valid_until| Payload::Knowledge {
+            ontology: "aeronet.example.v1".into(),
+            data: serde_json::json!({ "temperature_c": 21.5 }),
+            confidence: Some(0.9),
+            valid_from,
+            valid_until,
+            superseded_by: None,
+        };
+        let envelope = |payload| {
+            Envelope::new(
+                &alice,
+                bob.id(),
+                MessageKind::Answer,
+                payload,
+                None,
+                Some(cap.clone()),
+                Duration::minutes(5),
+            )
+            .unwrap()
+        };
+
+        let fresh = envelope(knowledge(
+            now - Duration::minutes(1),
+            now + Duration::hours(1),
+        ));
+        fresh.verify(now).unwrap();
+
+        let already_expired = envelope(knowledge(
+            now - Duration::hours(2),
+            now - Duration::hours(1),
+        ));
+        assert!(already_expired.verify(now).is_err());
+
+        let inverted_window = envelope(knowledge(now + Duration::hours(1), now));
+        assert!(inverted_window.verify(now).is_err());
+    }
 }

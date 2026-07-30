@@ -10,6 +10,6 @@ pub mod storage;
 pub mod transport;
 
 pub use capability::{Capability, CapabilityAction};
-pub use identity::{AgentId, Identity};
+pub use identity::{resolve_passphrase, AgentId, Identity};
 pub use protocol::{AuthChallenge, AuthProof, Envelope, MessageKind, Payload, TaskContract};
 pub use transport::NoiseSession;

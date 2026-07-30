@@ -1,6 +1,6 @@
 use aeronet::{
-    transport, AgentId, AuthChallenge, AuthProof, Capability, Envelope, Identity, MessageKind,
-    NoiseSession, Payload, TaskContract,
+    resolve_passphrase, transport, AgentId, AuthChallenge, AuthProof, Capability, Envelope,
+    Identity, MessageKind, NoiseSession, Payload, TaskContract,
 };
 use anyhow::{Context, Result};
 use chrono::Duration;
@@ -57,7 +57,8 @@ struct HistoryTurn {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
-    let identity = Identity::load(&args.key)?;
+    let passphrase = resolve_passphrase(&format!("key {}", args.key.display()), false)?;
+    let identity = Identity::load(&args.key, &passphrase)?;
     let peer = AgentId::from_str(&args.peer)?;
     let capability: Capability = serde_json::from_slice(&fs::read(&args.capability)?)?;
     let initial_action = if args.kickoff.is_some() {

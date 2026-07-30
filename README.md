@@ -128,6 +128,13 @@ cargo run --bin aeronet-key -- generate --out alice.key.json
 cargo run --bin aeronet-key -- generate --out bob.key.json
 ```
 
+Key files are encrypted at rest (Argon2id-derived key, XChaCha20-Poly1305),
+never plaintext. `generate` prompts for a passphrase interactively; every
+later command that loads a key (`show`, `issue`, `agent --key`,
+`broker --broker-key`) prompts again unless `AERONET_KEY_PASSPHRASE` is set
+in the environment — the only supported non-interactive path, since a
+`--passphrase` flag would leak the secret through shell history and `ps`.
+
 Each `generate` command prints the agent's DID. Export both values in your
 shell:
 
@@ -264,12 +271,14 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-The tests cover signatures after payload tampering, tokens used by the wrong
-agent, expired messages, replay, queue recovery after restart, signed ACKs,
-and the Noise transport (matching channel binding between both sides and
-rejection of tampered ciphertext). Federation itself is network/IO-heavy
-broker glue rather than pure logic, so it is verified with a real two-broker
-smoke test (see step 6 above) rather than unit tests.
+The unit tests cover signatures after payload tampering, tokens used by the
+wrong agent, expired messages, replay, queue recovery after restart, signed
+ACKs, the Noise transport (matching channel binding between both sides and
+rejection of tampered ciphertext), and the Knowledge payload's own validity
+window. `tests/federation.rs` is a real integration test: it spawns two
+actual broker processes and two agent processes and asserts a task and its
+reply cross the federation link, since that behavior is network/IO-heavy
+broker glue that a unit test can't exercise honestly.
 
 ## Building AeroNet together
 

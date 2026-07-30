@@ -1,4 +1,4 @@
-use aeronet::{AgentId, Capability, CapabilityAction, Identity};
+use aeronet::{resolve_passphrase, AgentId, Capability, CapabilityAction, Identity};
 use anyhow::Result;
 use chrono::{Duration, Utc};
 use clap::{Parser, Subcommand};
@@ -65,11 +65,15 @@ impl From<ActionArg> for CapabilityAction {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Generate { out } => {
+            let passphrase = resolve_passphrase(&format!("new key {}", out.display()), true)?;
             let identity = Identity::generate();
-            identity.save(&out)?;
+            identity.save(&out, &passphrase)?;
             println!("{}", identity.id());
         }
-        Command::Show { key } => println!("{}", Identity::load(key)?.id()),
+        Command::Show { key } => {
+            let passphrase = resolve_passphrase(&format!("key {}", key.display()), false)?;
+            println!("{}", Identity::load(key, &passphrase)?.id())
+        }
         Command::Issue {
             issuer_key,
             grantee,
@@ -81,7 +85,9 @@ fn main() -> Result<()> {
             if out.exists() {
                 anyhow::bail!("Refusing to overwrite existing token: {}", out.display())
             }
-            let issuer = Identity::load(issuer_key)?;
+            let passphrase =
+                resolve_passphrase(&format!("issuer key {}", issuer_key.display()), false)?;
+            let issuer = Identity::load(issuer_key, &passphrase)?;
             let token = Capability::issue(
                 &issuer,
                 AgentId::from_str(&grantee)?,
