@@ -2,3 +2,6 @@
 *.key.json
 *.cap.json
 conversation.jsonl
+aeronet.db
+aeronet.db-shm
+aeronet.db-wal

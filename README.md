@@ -92,14 +92,16 @@ hướng đi đó, không phải tuyên bố đã giải xong toàn bộ Interne
 | Capability token | Giới hạn grantee, audience, action, thời hạn và tổng số message |
 | Task contract | Goal, constraints, compute budget, deadline và output schema |
 | Knowledge object | Dữ liệu có ontology, confidence, `valid_from`, `valid_until` và `superseded_by` |
-| Broker | Resolver/relay WebSocket, xác minh policy và ghi audit JSONL |
-| Agent runtime | Adapter Anthropic và chế độ `echo` để thử nghiệm không cần API |
+| Durable store | SQLite WAL lưu replay state, capability usage và hàng đợi offline |
+| Broker | Resolver/relay, xác minh policy, khôi phục pending message và ghi audit JSONL |
+| Agent runtime | Signed delivery ACK, adapter Anthropic và chế độ `echo` |
 
 ```text
 src/
 ├── identity.rs       DID, key storage, ký và xác minh Ed25519
 ├── capability.rs     capability token
 ├── protocol.rs       auth proof, envelope, task và knowledge object
+├── storage.rs        persistent queue, replay state và capability quota
 └── bin/
     ├── broker.rs     resolver/relay WebSocket + policy enforcement
     ├── agent.rs      agent runtime + model adapter
@@ -141,8 +143,13 @@ cargo run --bin aeronet-key -- issue \
 RUST_LOG=info cargo run --bin broker
 ```
 
-Broker mặc định nghe tại `127.0.0.1:8787` và ghi message hợp lệ vào
-`conversation.jsonl`. Log cũ không bị xóa khi broker khởi động lại.
+Broker mặc định nghe tại `127.0.0.1:8787`, ghi audit vào `conversation.jsonl`
+và trạng thái giao nhận vào `aeronet.db`. Có thể đổi vị trí bằng
+`--audit-log <path>` và `--state-db <path>`. Cả audit log lẫn hàng đợi đều tồn
+tại qua lần khởi động tiếp theo.
+
+Agent gửi task có thể kết nối trước recipient. Broker sẽ lưu task và chuyển lại
+khi recipient xác thực thành công. Message chỉ rời hàng đợi sau một ACK hợp lệ.
 
 ### 4. Khởi động agent chờ
 
@@ -174,15 +181,16 @@ AeroNet hiện là MVP của lớp ứng dụng, chưa phải một mạng phân
   khai qua mạng thật cần WSS/mTLS hoặc Noise session encryption.
 - Broker vẫn là resolver và relay đơn; chưa có DHT, federation, multi-hop route
   attestation hay reputation.
-- Message gửi khi recipient offline mới chỉ nằm trong audit log, chưa có hàng
-  đợi bền vững hoặc cơ chế retry/deduplication hoàn chỉnh.
-- Quota capability nằm trong bộ nhớ broker và bị reset khi khởi động lại; chưa
-  có revocation registry hay delegation chain.
+- Delivery hiện bảo đảm **at-least-once**; agent có ACK tự động nhưng chưa có
+  scheduler retry theo backoff hoặc dead-letter queue.
+- Replay state và pending queue chạy trên một SQLite node; chưa có replication,
+  compaction policy hoặc đồng thuận giữa nhiều broker.
+- Capability quota đã bền vững nhưng chưa có revocation registry hay delegation chain.
 - Trường chi phí mới là điểm mở rộng; chưa tích hợp payment channel hoặc ledger.
 - Chưa có web-of-attestation và threshold governance giữa nhiều tổ chức.
 
 Những giới hạn này cũng xác định lộ trình tiếp theo: mã hóa mặc định, registry
-federated, delivery bền vững, route có thể kiểm toán, trust đa nguồn và cơ chế
+federated, delivery phân tán, route có thể kiểm toán, trust đa nguồn và cơ chế
 trao đổi giá trị trực tiếp giữa các agent.
 
 ## Kiểm thử
@@ -193,8 +201,8 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Các test hiện kiểm tra chữ ký sau khi payload bị sửa, token bị dùng bởi sai
-agent và message đã hết hạn.
+Các test kiểm tra chữ ký sau khi payload bị sửa, token bị dùng bởi sai agent,
+message hết hạn, replay, khôi phục queue sau restart và signed ACK.
 
 ## Cùng xây dựng AeroNet
 

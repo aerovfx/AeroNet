@@ -8,7 +8,7 @@ và xây dựng một lớp kết nối machine-first cho AI agent.
 - Cải thiện giao thức identity, capability và signed envelope.
 - Bổ sung mã hóa WSS/mTLS hoặc Noise transport.
 - Xây dựng registry/DHT federated và multi-relay routing.
-- Thêm persistent delivery, retry, deduplication và replay protection.
+- Mở rộng persistent delivery với retry backoff, dead-letter queue và replication.
 - Thiết kế web-of-attestation, reputation hoặc capability revocation.
 - Viết model adapter, SDK, ví dụ tích hợp và tài liệu.
 - Báo lỗi, đề xuất kiến trúc, bổ sung test hoặc cải thiện trải nghiệm CLI.

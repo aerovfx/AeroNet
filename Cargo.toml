@@ -1,6 +1,6 @@
 [package]
 name = "aeronet"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 authors = ["VietChung"]
@@ -33,6 +33,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 futures-util = "0.3"
 rand = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -68,6 +68,14 @@ async fn main() -> Result<()> {
     capability
         .verify(&identity.id(), &peer, &initial_action, chrono::Utc::now())
         .context("Capability không dùng được cho vai trò đã chọn")?;
+    capability
+        .verify(
+            &identity.id(),
+            &peer,
+            &aeronet::CapabilityAction::Acknowledge,
+            chrono::Utc::now(),
+        )
+        .context("Capability phải cho phép acknowledge để giao nhận bền vững")?;
 
     let api_key = match args.provider {
         Provider::Anthropic => {
@@ -130,6 +138,22 @@ async fn main() -> Result<()> {
         incoming
             .verify(chrono::Utc::now())
             .context("Broker chuyển message không hợp lệ")?;
+        if incoming.from != peer || incoming.to != identity.id() {
+            tracing::warn!(message_id = %incoming.id, "Bỏ qua message ngoài phiên peer đã cấu hình");
+            continue;
+        }
+        let delivery_ack = Envelope::new(
+            &identity,
+            peer.clone(),
+            MessageKind::Ack,
+            Payload::Text {
+                content: "delivered".into(),
+            },
+            Some(incoming.id.clone()),
+            Some(capability.clone()),
+            Duration::minutes(1),
+        )?;
+        send(&mut tx, &delivery_ack).await?;
         if matches!(incoming.kind, MessageKind::End) {
             break;
         }

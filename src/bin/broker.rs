@@ -1,4 +1,7 @@
-use aeronet::{AuthChallenge, AuthProof, Envelope};
+use aeronet::{
+    storage::{AcceptOutcome, DeliveryStore},
+    AuthChallenge, AuthProof, Envelope,
+};
 use axum::{
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
@@ -23,14 +26,22 @@ struct Args {
     listen: String,
     #[arg(long, default_value = "conversation.jsonl")]
     audit_log: PathBuf,
+    #[arg(long, default_value = "aeronet.db")]
+    state_db: PathBuf,
 }
 
-type Peers = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Envelope>>>>;
+#[derive(Clone)]
+struct PeerConnection {
+    session_id: String,
+    sender: mpsc::UnboundedSender<Envelope>,
+}
+
+type Peers = Arc<Mutex<HashMap<String, PeerConnection>>>;
 
 #[derive(Clone)]
 struct AppState {
     peers: Peers,
-    token_usage: Arc<Mutex<HashMap<String, u32>>>,
+    store: Arc<Mutex<DeliveryStore>>,
     audit_log: Arc<PathBuf>,
 }
 
@@ -42,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let state = AppState {
         peers: Arc::new(Mutex::new(HashMap::new())),
-        token_usage: Arc::new(Mutex::new(HashMap::new())),
+        store: Arc::new(Mutex::new(DeliveryStore::open(&args.state_db)?)),
         audit_log: Arc::new(args.audit_log),
     };
     let app = Router::new()
@@ -91,8 +102,26 @@ async fn handle_socket(mut socket: WebSocket, did: String, state: AppState) {
     }
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    state.peers.lock().await.insert(did.clone(), tx);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    state.peers.lock().await.insert(
+        did.clone(),
+        PeerConnection {
+            session_id: session_id.clone(),
+            sender: tx.clone(),
+        },
+    );
     tracing::info!(agent = %did, "agent connected");
+
+    match state.store.lock().await.pending_for(&did) {
+        Ok(pending) => {
+            tracing::info!(agent = %did, count = pending.len(), "restoring pending messages");
+            for envelope in pending {
+                let _ = tx.send(envelope);
+            }
+        }
+        Err(error) => tracing::error!(agent = %did, %error, "cannot restore pending messages"),
+    }
+
     let forward = tokio::spawn(async move {
         while let Some(envelope) = rx.recv().await {
             let Ok(json) = serde_json::to_string(&envelope) else {
@@ -120,31 +149,40 @@ async fn handle_socket(mut socket: WebSocket, did: String, state: AppState) {
             tracing::warn!(agent = %did, %error, "rejected envelope");
             continue;
         }
-        if let Some(cap) = &envelope.capability {
-            let mut usages = state.token_usage.lock().await;
-            let count = usages.entry(cap.nonce.clone()).or_default();
-            if *count >= cap.max_messages {
-                tracing::warn!(nonce = %cap.nonce, "capability quota exhausted");
+        let outcome = match state.store.lock().await.accept(&envelope) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::warn!(agent = %did, message_id = %envelope.id, %error, "rejected durable state transition");
                 continue;
             }
-            *count += 1;
-        }
+        };
         if let Err(error) = append_audit(&state.audit_log, &envelope).await {
             tracing::error!(%error, "cannot write audit log");
+        }
+        if outcome == AcceptOutcome::Acknowledged {
+            tracing::debug!(message_id = %envelope.id, in_reply_to = ?envelope.in_reply_to, "delivery acknowledged");
+            continue;
         }
         let target = state
             .peers
             .lock()
             .await
             .get(&envelope.to.to_string())
-            .cloned();
+            .map(|peer| peer.sender.clone());
         if let Some(target) = target {
             let _ = target.send(envelope);
         } else {
-            tracing::warn!(to = %envelope.to, "recipient offline; message retained only in audit log");
+            tracing::info!(to = %envelope.to, message_id = %envelope.id, "recipient offline; message queued durably");
         }
     }
-    state.peers.lock().await.remove(&did);
+    let mut peers = state.peers.lock().await;
+    if peers
+        .get(&did)
+        .is_some_and(|peer| peer.session_id == session_id)
+    {
+        peers.remove(&did);
+    }
+    drop(peers);
     forward.abort();
     tracing::info!(agent = %did, "agent disconnected");
 }
